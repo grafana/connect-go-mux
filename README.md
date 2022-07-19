@@ -22,4 +22,4 @@ With buf, your buf.gen.yaml will look like this:
     out: gen
 ```
 
-This generates helper for registering services with [gorilla.mux](https://github.com/gorilla/mux).
+This generates helper for registering services with [gorilla.Mux](https://github.com/gorilla/mux).
