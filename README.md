@@ -4,7 +4,7 @@ protoc-gen-connect-go-mux is a plugin for the Protobuf compiler that generates
 Go code. To use it, build this program and make it available on your PATH as
 protoc-gen-connect-go-mux.
 
-The 'connect-go-mux' suffix becomes part of the arguments for the Protobuf
+The `connect-go-mux` suffix becomes part of the arguments for the Protobuf
 compiler. To generate the base Go types and Connect code using protoc:
 
 ```bash
