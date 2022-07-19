@@ -12,14 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// protoc-gen-connect-go is a plugin for the Protobuf compiler that generates
+// protoc-gen-connect-go-mux is a plugin for the Protobuf compiler that generates
 // Go code. To use it, build this program and make it available on your PATH as
-// protoc-gen-connect-go.
+// protoc-gen-connect-go-mux.
 //
-// The 'connect-go' suffix becomes part of the arguments for the Protobuf
+// The 'connect-go-mux' suffix becomes part of the arguments for the Protobuf
 // compiler. To generate the base Go types and Connect code using protoc:
 //
-//	 protoc --go_out=gen --connect-go_out=gen path/to/file.proto
+//	 protoc --go_out=gen --connect-go-mux_out=gen path/to/file.proto
 //
 // With buf, your buf.gen.yaml will look like this:
 //
@@ -27,15 +27,10 @@
 //   plugins:
 //     name: go
 //     out: gen
-//     name: connect-go
+//     name: connect-go-mux
 //     out: gen
 //
-// This generates service definitions for the Protobuf types and services
-// defined by file.proto. If file.proto defines the foov1 Protobuf package, the
-// invocations above will write output to:
-//
-//	 gen/path/to/file.pb.go
-//	 gen/path/to/connectfoov1/file.connect.go
+// This generates helper for registering services with gorilla.mux.
 package main
 
 import (
@@ -53,13 +48,10 @@ import (
 )
 
 const (
-	contextPackage = protogen.GoImportPath("context")
-	errorsPackage  = protogen.GoImportPath("errors")
-	httpPackage    = protogen.GoImportPath("net/http")
-	stringsPackage = protogen.GoImportPath("strings")
 	connectPackage = protogen.GoImportPath("github.com/bufbuild/connect-go")
+	muxPackage     = protogen.GoImportPath("github.com/gorilla/mux")
 
-	generatedFilenameExtension = ".connect.go"
+	generatedFilenameExtension = ".connect.mux.go"
 	generatedPackageSuffix     = "connect"
 	version                    = "0.1.0"
 
@@ -114,9 +106,8 @@ func generate(plugin *protogen.Plugin, file *protogen.File) {
 		)),
 	)
 	generatePreamble(generatedFile, file)
-	generateServiceNameConstants(generatedFile, file.Services)
 	for _, service := range file.Services {
-		generateService(generatedFile, file, service)
+		generateService(generatedFile, service)
 	}
 }
 
@@ -140,187 +131,21 @@ func generatePreamble(g *protogen.GeneratedFile, file *protogen.File) {
 	g.P()
 }
 
-func generateServiceNameConstants(g *protogen.GeneratedFile, services []*protogen.Service) {
-	g.P("const (")
-	for _, service := range services {
-		constName := fmt.Sprintf("%sName", service.Desc.Name())
-		wrapComments(g, constName, " is the fully-qualified name of the ",
-			service.Desc.Name(), " service.")
-		g.P(constName, ` = "`, service.Desc.FullName(), `"`)
-	}
-	g.P(")")
-	g.P()
-}
-
-func generateService(g *protogen.GeneratedFile, file *protogen.File, service *protogen.Service) {
+func generateService(g *protogen.GeneratedFile, service *protogen.Service) {
 	names := newNames(service)
-	generateClientInterface(g, service, names)
-	generateClientImplementation(g, service, names)
-	generateServerInterface(g, service, names)
 	generateServerConstructor(g, service, names)
-	generateUnimplementedServerImplementation(g, service, names)
-}
-
-func generateClientInterface(g *protogen.GeneratedFile, service *protogen.Service, names names) {
-	wrapComments(g, names.Client, " is a client for the ", service.Desc.FullName(), " service.")
-	if isDeprecatedService(service) {
-		g.P("//")
-		deprecated(g)
-	}
-	g.Annotate(names.Client, service.Location)
-	g.P("type ", names.Client, " interface {")
-	for _, method := range service.Methods {
-		g.Annotate(names.Client+"."+method.GoName, method.Location)
-		leadingComments(
-			g,
-			method.Comments.Leading,
-			isDeprecatedMethod(method),
-		)
-		g.P(clientSignature(g, method, false /* named */))
-	}
-	g.P("}")
-	g.P()
-}
-
-func generateClientImplementation(g *protogen.GeneratedFile, service *protogen.Service, names names) {
-	clientOption := connectPackage.Ident("ClientOption")
-
-	// Client constructor.
-	wrapComments(g, names.ClientConstructor, " constructs a client for the ", service.Desc.FullName(),
-		" service. By default, it uses the Connect protocol with the binary Protobuf Codec, ",
-		"asks for gzipped responses, and sends uncompressed requests. ",
-		"To use the gRPC or gRPC-Web protocols, supply the connect.WithGRPC() or ",
-		"connect.WithGRPCWeb() options.")
-	g.P("//")
-	wrapComments(g, "The URL supplied here should be the base URL for the Connect or gRPC server ",
-		"(for example, http://api.acme.com or https://acme.com/grpc).")
-	if isDeprecatedService(service) {
-		g.P("//")
-		deprecated(g)
-	}
-	g.P("func ", names.ClientConstructor, " (httpClient ", connectPackage.Ident("HTTPClient"),
-		", baseURL string, opts ...", clientOption, ") ", names.Client, " {")
-	g.P("baseURL = ", stringsPackage.Ident("TrimRight"), `(baseURL, "/")`)
-	g.P("return &", names.ClientImpl, "{")
-	for _, method := range service.Methods {
-		g.P(unexport(method.GoName), ": ",
-			connectPackage.Ident("NewClient"),
-			"[", method.Input.GoIdent, ", ", method.Output.GoIdent, "]",
-			"(",
-		)
-		g.P("httpClient,")
-		g.P(`baseURL + "`, procedureName(method), `",`)
-		g.P("opts...,")
-		g.P("),")
-	}
-	g.P("}")
-	g.P("}")
-	g.P()
-
-	// Client struct.
-	wrapComments(g, names.ClientImpl, " implements ", names.Client, ".")
-	g.P("type ", names.ClientImpl, " struct {")
-	for _, method := range service.Methods {
-		g.P(unexport(method.GoName), " *", connectPackage.Ident("Client"),
-			"[", method.Input.GoIdent, ", ", method.Output.GoIdent, "]")
-	}
-	g.P("}")
-	g.P()
-	for _, method := range service.Methods {
-		generateClientMethod(g, service, method, names)
-	}
-}
-
-func generateClientMethod(g *protogen.GeneratedFile, service *protogen.Service, method *protogen.Method, names names) {
-	receiver := names.ClientImpl
-	isStreamingClient := method.Desc.IsStreamingClient()
-	isStreamingServer := method.Desc.IsStreamingServer()
-	wrapComments(g, method.GoName, " calls ", method.Desc.FullName(), ".")
-	if isDeprecatedMethod(method) {
-		g.P("//")
-		deprecated(g)
-	}
-	g.P("func (c *", receiver, ") ", clientSignature(g, method, true /* named */), " {")
-
-	switch {
-	case isStreamingClient && !isStreamingServer:
-		g.P("return c.", unexport(method.GoName), ".CallClientStream(ctx)")
-	case !isStreamingClient && isStreamingServer:
-		g.P("return c.", unexport(method.GoName), ".CallServerStream(ctx, req)")
-	case isStreamingClient && isStreamingServer:
-		g.P("return c.", unexport(method.GoName), ".CallBidiStream(ctx)")
-	default:
-		g.P("return c.", unexport(method.GoName), ".CallUnary(ctx, req)")
-	}
-	g.P("}")
-	g.P()
-}
-
-func clientSignature(g *protogen.GeneratedFile, method *protogen.Method, named bool) string {
-	reqName := "req"
-	ctxName := "ctx"
-	if !named {
-		reqName, ctxName = "", ""
-	}
-	if method.Desc.IsStreamingClient() && method.Desc.IsStreamingServer() {
-		// bidi streaming
-		return method.GoName + "(" + ctxName + " " + g.QualifiedGoIdent(contextPackage.Ident("Context")) + ") " +
-			"*" + g.QualifiedGoIdent(connectPackage.Ident("BidiStreamForClient")) +
-			"[" + g.QualifiedGoIdent(method.Input.GoIdent) + ", " + g.QualifiedGoIdent(method.Output.GoIdent) + "]"
-	}
-	if method.Desc.IsStreamingClient() {
-		// client streaming
-		return method.GoName + "(" + ctxName + " " + g.QualifiedGoIdent(contextPackage.Ident("Context")) + ") " +
-			"*" + g.QualifiedGoIdent(connectPackage.Ident("ClientStreamForClient")) +
-			"[" + g.QualifiedGoIdent(method.Input.GoIdent) + ", " + g.QualifiedGoIdent(method.Output.GoIdent) + "]"
-	}
-	if method.Desc.IsStreamingServer() {
-		return method.GoName + "(" + ctxName + " " + g.QualifiedGoIdent(contextPackage.Ident("Context")) +
-			", " + reqName + " *" + g.QualifiedGoIdent(connectPackage.Ident("Request")) + "[" +
-			g.QualifiedGoIdent(method.Input.GoIdent) + "]) " +
-			"(*" + g.QualifiedGoIdent(connectPackage.Ident("ServerStreamForClient")) +
-			"[" + g.QualifiedGoIdent(method.Output.GoIdent) + "]" +
-			", error)"
-	}
-	// unary; symmetric so we can re-use server templating
-	return method.GoName + serverSignatureParams(g, method, named)
-}
-
-func generateServerInterface(g *protogen.GeneratedFile, service *protogen.Service, names names) {
-	wrapComments(g, names.Server, " is an implementation of the ", service.Desc.FullName(), " service.")
-	if isDeprecatedService(service) {
-		g.P("//")
-		deprecated(g)
-	}
-	g.Annotate(names.Server, service.Location)
-	g.P("type ", names.Server, " interface {")
-	for _, method := range service.Methods {
-		leadingComments(
-			g,
-			method.Comments.Leading,
-			isDeprecatedMethod(method),
-		)
-		g.Annotate(names.Server+"."+method.GoName, method.Location)
-		g.P(serverSignature(g, method))
-	}
-	g.P("}")
-	g.P()
 }
 
 func generateServerConstructor(g *protogen.GeneratedFile, service *protogen.Service, names names) {
-	wrapComments(g, names.ServerConstructor, " builds an HTTP handler from the service implementation.",
-		" It returns the path on which to mount the handler and the handler itself.")
-	g.P("//")
-	wrapComments(g, "By default, handlers support the Connect, gRPC, and gRPC-Web protocols with ",
-		"the binary Protobuf and JSON codecs. They also support gzip compression.")
+	wrapComments(g, names.ServerRegistration, " register an HTTP handler to a mux.Router from the service implementation.")
 	if isDeprecatedService(service) {
 		g.P("//")
 		deprecated(g)
 	}
 	handlerOption := connectPackage.Ident("HandlerOption")
-	g.P("func ", names.ServerConstructor, "(svc ", names.Server, ", opts ...", handlerOption,
-		") (string, ", httpPackage.Ident("Handler"), ") {")
-	g.P("mux := ", httpPackage.Ident("NewServeMux"), "()")
+	router := muxPackage.Ident("Router")
+	g.P("func ", names.ServerRegistration, "(mux *", router, ", svc ", names.Server, ", opts ...", handlerOption,
+		") {")
 	for _, method := range service.Methods {
 		isStreamingServer := method.Desc.IsStreamingServer()
 		isStreamingClient := method.Desc.IsStreamingClient()
@@ -339,72 +164,8 @@ func generateServerConstructor(g *protogen.GeneratedFile, service *protogen.Serv
 		g.P("opts...,")
 		g.P("))")
 	}
-	g.P(`return "/`, reflectionName(service), `/", mux`)
 	g.P("}")
 	g.P()
-}
-
-func generateUnimplementedServerImplementation(g *protogen.GeneratedFile, service *protogen.Service, names names) {
-	wrapComments(g, names.UnimplementedServer, " returns CodeUnimplemented from all methods.")
-	g.P("type ", names.UnimplementedServer, " struct {}")
-	g.P()
-	for _, method := range service.Methods {
-		g.P("func (", names.UnimplementedServer, ") ", serverSignature(g, method), "{")
-		if method.Desc.IsStreamingServer() {
-			g.P("return ", connectPackage.Ident("NewError"), "(",
-				connectPackage.Ident("CodeUnimplemented"), ", ", errorsPackage.Ident("New"),
-				`("`, method.Desc.FullName(), ` is not implemented"))`)
-		} else {
-			g.P("return nil, ", connectPackage.Ident("NewError"), "(",
-				connectPackage.Ident("CodeUnimplemented"), ", ", errorsPackage.Ident("New"),
-				`("`, method.Desc.FullName(), ` is not implemented"))`)
-		}
-		g.P("}")
-		g.P()
-	}
-	g.P()
-}
-
-func serverSignature(g *protogen.GeneratedFile, method *protogen.Method) string {
-	return method.GoName + serverSignatureParams(g, method, false /* named */)
-}
-
-func serverSignatureParams(g *protogen.GeneratedFile, method *protogen.Method, named bool) string {
-	ctxName := "ctx "
-	reqName := "req "
-	streamName := "stream "
-	if !named {
-		ctxName, reqName, streamName = "", "", ""
-	}
-	if method.Desc.IsStreamingClient() && method.Desc.IsStreamingServer() {
-		// bidi streaming
-		return "(" + ctxName + g.QualifiedGoIdent(contextPackage.Ident("Context")) + ", " +
-			streamName + "*" + g.QualifiedGoIdent(connectPackage.Ident("BidiStream")) +
-			"[" + g.QualifiedGoIdent(method.Input.GoIdent) + ", " + g.QualifiedGoIdent(method.Output.GoIdent) + "]" +
-			") error"
-	}
-	if method.Desc.IsStreamingClient() {
-		// client streaming
-		return "(" + ctxName + g.QualifiedGoIdent(contextPackage.Ident("Context")) + ", " +
-			streamName + "*" + g.QualifiedGoIdent(connectPackage.Ident("ClientStream")) +
-			"[" + g.QualifiedGoIdent(method.Input.GoIdent) + "]" +
-			") (*" + g.QualifiedGoIdent(connectPackage.Ident("Response")) + "[" + g.QualifiedGoIdent(method.Output.GoIdent) + "] ,error)"
-	}
-	if method.Desc.IsStreamingServer() {
-		// server streaming
-		return "(" + ctxName + g.QualifiedGoIdent(contextPackage.Ident("Context")) +
-			", " + reqName + "*" + g.QualifiedGoIdent(connectPackage.Ident("Request")) + "[" +
-			g.QualifiedGoIdent(method.Input.GoIdent) + "], " +
-			streamName + "*" + g.QualifiedGoIdent(connectPackage.Ident("ServerStream")) +
-			"[" + g.QualifiedGoIdent(method.Output.GoIdent) + "]" +
-			") error"
-	}
-	// unary
-	return "(" + ctxName + g.QualifiedGoIdent(contextPackage.Ident("Context")) +
-		", " + reqName + "*" + g.QualifiedGoIdent(connectPackage.Ident("Request")) + "[" +
-		g.QualifiedGoIdent(method.Input.GoIdent) + "]) " +
-		"(*" + g.QualifiedGoIdent(connectPackage.Ident("Response")) + "[" +
-		g.QualifiedGoIdent(method.Output.GoIdent) + "], error)"
 }
 
 func procedureName(method *protogen.Method) string {
@@ -416,18 +177,9 @@ func procedureName(method *protogen.Method) string {
 	)
 }
 
-func reflectionName(service *protogen.Service) string {
-	return fmt.Sprintf("%s.%s", service.Desc.ParentFile().Package(), service.Desc.Name())
-}
-
 func isDeprecatedService(service *protogen.Service) bool {
 	serviceOptions, ok := service.Desc.Options().(*descriptorpb.ServiceOptions)
 	return ok && serviceOptions.GetDeprecated()
-}
-
-func isDeprecatedMethod(method *protogen.Method) bool {
-	methodOptions, ok := method.Desc.Options().(*descriptorpb.MethodOptions)
-	return ok && methodOptions.GetDeprecated()
 }
 
 // Raggedy comments in the generated code are driving me insane. This
@@ -464,46 +216,21 @@ func wrapComments(g *protogen.GeneratedFile, elems ...any) {
 	}
 }
 
-func leadingComments(g *protogen.GeneratedFile, comments protogen.Comments, isDeprecated bool) {
-	if comments.String() != "" {
-		g.P(strings.TrimSpace(comments.String()))
-	}
-	if isDeprecated {
-		if comments.String() != "" {
-			g.P("//")
-		}
-		deprecated(g)
-	}
-}
-
 func deprecated(g *protogen.GeneratedFile) {
 	g.P("// Deprecated: do not use.")
 }
 
-func unexport(s string) string {
-	return strings.ToLower(s[:1]) + s[1:]
-}
-
 type names struct {
-	Base                string
-	Client              string
-	ClientConstructor   string
-	ClientImpl          string
-	ClientExposeMethod  string
-	Server              string
-	ServerConstructor   string
-	UnimplementedServer string
+	Base               string
+	ServerRegistration string
+	Server             string
 }
 
 func newNames(service *protogen.Service) names {
 	base := service.GoName
 	return names{
-		Base:                base,
-		Client:              fmt.Sprintf("%sClient", base),
-		ClientConstructor:   fmt.Sprintf("New%sClient", base),
-		ClientImpl:          fmt.Sprintf("%sClient", unexport(base)),
-		Server:              fmt.Sprintf("%sHandler", base),
-		ServerConstructor:   fmt.Sprintf("New%sHandler", base),
-		UnimplementedServer: fmt.Sprintf("Unimplemented%sHandler", base),
+		Base:               base,
+		ServerRegistration: fmt.Sprintf("Register%sHandler", base),
+		Server:             fmt.Sprintf("%sHandler", base),
 	}
 }
