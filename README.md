@@ -7,7 +7,7 @@ protoc-gen-connect-go-mux.
 The 'connect-go-mux' suffix becomes part of the arguments for the Protobuf
 compiler. To generate the base Go types and Connect code using protoc:
 
-```
+```bash
 protoc --go_out=gen --connect-go-mux_out=gen path/to/file.proto
 ```
 
