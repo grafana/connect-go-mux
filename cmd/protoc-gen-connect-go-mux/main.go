@@ -1,4 +1,4 @@
-// Copyright 2021-2022 Buf Technologies, Inc.
+// Copyright 2022-2023 Grafana Labs
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -19,16 +19,16 @@
 // The 'connect-go-mux' suffix becomes part of the arguments for the Protobuf
 // compiler. To generate the base Go types and Connect code using protoc:
 //
-//	 protoc --go_out=gen --connect-go-mux_out=gen path/to/file.proto
+//	protoc --go_out=gen --connect-go-mux_out=gen path/to/file.proto
 //
 // With buf, your buf.gen.yaml will look like this:
 //
-//   version: v1
-//   plugins:
-//     name: go
-//     out: gen
-//     name: connect-go-mux
-//     out: gen
+//	version: v1
+//	plugins:
+//	  name: go
+//	  out: gen
+//	  name: connect-go-mux
+//	  out: gen
 //
 // This generates helper for registering services with gorilla.mux.
 package main
