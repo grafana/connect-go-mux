@@ -48,7 +48,7 @@ import (
 )
 
 const (
-	connectPackage = protogen.GoImportPath("github.com/bufbuild/connect-go")
+	connectPackage = protogen.GoImportPath("connectrpc.com/connect")
 	muxPackage     = protogen.GoImportPath("github.com/gorilla/mux")
 
 	generatedFilenameExtension = ".connect.mux.go"
